@@ -83,3 +83,18 @@ def test_async_error():
     with Injector() as inj:
         with raises(AsyncError):
             inj.bind(func)
+
+
+# noinspection PyUnresolvedReferences
+def test_bind():
+    def func():
+        pass
+
+    inj = Injector()
+    b1 = inj.bind(func)
+    b2 = inj.bind(func, cached=True)
+    b3 = inj.bind(cached=True)(func)
+    assert b1 == b2 == b3
+    assert not b1._cached
+    assert b2._cached
+    assert b3._cached

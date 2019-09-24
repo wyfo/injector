@@ -28,12 +28,27 @@ class Injector(Dict['Dependency', Any], ContextManager['Injector'],
         self._async_exit: Optional[bool] = None
         self._async: Optional[bool] = None
 
-    def bind(self, func: Func) -> Func:
-        from injector.bound import Bound
-        bound = Bound(func, self)
-        if self._async is False and bound.is_async:
-            raise AsyncError(func, self)
-        return cast(Func, bound)
+    @overload  # noqa: F811
+    def bind(self, *, cached: bool) -> Callable[[Func], Func]:
+        ...
+
+    @overload  # noqa: F811
+    def bind(self, func: Func, *, cached: bool = False) -> Func:
+        ...
+
+    def bind(self, func=None, *, cached=False):  # noqa: F811
+        # noinspection PyShadowingNames
+        def wrapper(func: Func) -> Func:
+            from injector.bound import Bound
+            bound = Bound(func, self, cached)
+            if self._async is False and bound.is_async:
+                raise AsyncError(func, self)
+            return cast(Func, bound)
+
+        if func is None:
+            return wrapper
+        else:
+            return wrapper(func)
 
     @overload  # noqa: F811
     def cache(self, dep: Dependency, res: ContextManager[T]) -> T:
