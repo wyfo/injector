@@ -1,21 +1,19 @@
-from contextlib import asynccontextmanager, contextmanager
-from unittest.mock import MagicMock
+from unittest.mock import Mock
 
-from pytest import mark, raises
+from pytest import raises, mark
 
-from injector import Injector
+from injector import Injector, inject
 from injector.errors import AsyncError
 
 
 def test_inj_sync():
-    def dep():
-        pass
-
-    dep_ = MagicMock()
+    var = 0
+    def exit_(*args):
+        nonlocal var
+        var += 1
     with Injector() as inj:
-        assert dep_ not in inj
-        inj.cache(dep_, dep())
-        assert inj[dep_] is None
+        assert not inj._async
+        inj.register_exit()
     var = 0
 
     @contextmanager
@@ -65,12 +63,8 @@ async def test_inj_async():
 
 
 def test_del(mocker):
-    @contextmanager
-    def dep():
-        yield
-
     inj = Injector()
-    inj.cache(MagicMock(), dep())
+    inj.register_exit(Mock())
     warn = mocker.patch('warnings.warn')
     del inj
     warn.assert_called_once()
@@ -85,16 +79,23 @@ def test_async_error():
             inj.bind(func)
 
 
-# noinspection PyUnresolvedReferences
-def test_bind():
-    def func():
-        pass
+@mark.parametrize("cached, final", [(False, 2), (True, 1)])
+def test_bind(cached, final):
+    count = 0
+
+    def dep() -> int:
+        return 0
+
+    def func(i: int = inject(dep)) -> int:
+        nonlocal count
+        count += 1
+        return i
 
     inj = Injector()
-    b1 = inj.bind(func)
-    b2 = inj.bind(func, cached=True)
-    b3 = inj.bind(cached=True)(func)
-    assert b1 == b2 == b3
-    assert not b1._cached
-    assert b2._cached
-    assert b3._cached
+    bound = inj.bind(func, cached=cached)
+
+    assert bound() == 0
+    assert count == 1
+    assert bound() == 0
+    assert count == final
+

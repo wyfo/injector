@@ -1,6 +1,6 @@
 from types import FunctionType, TracebackType
-from typing import (Any, AsyncContextManager, Awaitable, Callable, Mapping,
-                    Optional, Type, Union)
+from typing import (Any, AsyncContextManager, Awaitable, Callable,
+                    Mapping, Optional, Type, Union)
 
 Exit = Callable[[Optional[Type[BaseException]],
                  Optional[BaseException],

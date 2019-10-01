@@ -10,10 +10,9 @@ def test_dependency():
     def dependency() -> int:
         return 42
 
-    dep = Dependency(dependency)
-    assert repr(dep) == repr(dependency)
+    dep = Dependency(dependency, cached=True)
     assert hash(dep) == hash(dependency)
-    assert dep == Dependency(dependency)
+    assert dep == Dependency(dependency, cached=True)
     assert not dep.is_async
 
 
@@ -25,7 +24,7 @@ def test_async_dependency():
         pass
 
     with raises(AsyncDependency):
-        Dependency(dep)
+        Dependency(dep, cached=True)
 
 
 def test_dependency_with_free_parameters():
@@ -60,8 +59,8 @@ def test_type_dependency():
     def dep2(_: 'Global' = inject()):
         pass
 
-    assert Dependency(dep1).dependencies["_"].func == Global
-    assert Dependency(dep2).dependencies["_"].func == Global
+    assert Dependency(dep1, cached=True).dependencies["_"].func == Global
+    assert Dependency(dep2, cached=True).dependencies["_"].func == Global
 
 
 def test_invalid_type():
@@ -72,4 +71,5 @@ def test_invalid_type():
         pass
 
     with raises(InvalidType):
-        Dependency(dep)
+        Dependency(dep, cached=True)
+

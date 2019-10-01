@@ -3,6 +3,7 @@ from __future__ import annotations
 import warnings
 from asyncio import Lock
 from collections import defaultdict
+from functools import wraps
 from typing import (Any, AsyncContextManager, Awaitable, Callable,
                     ContextManager, Dict, List, Mapping, Optional,
                     TYPE_CHECKING, Type, TypeVar, Union, cast, overload)
@@ -15,8 +16,15 @@ from injector.utils import AExit, Exit
 if TYPE_CHECKING:
     from injector.dependency import Dependency
 
+try:
+    from dataclasses import is_dataclass
+except ImportError:
+    def is_dataclass(obj):  # type: ignore
+        return False
+
 T = TypeVar("T")
 Func = TypeVar("Func", bound=Callable)
+Cls = TypeVar("Cls", bound=type)
 
 
 class Injector(Dict['Dependency', Any], ContextManager['Injector'],
@@ -25,8 +33,10 @@ class Injector(Dict['Dependency', Any], ContextManager['Injector'],
         super().__init__()
         self._lock: Mapping[Dependency, Lock] = defaultdict(Lock)
         self._exit: List[Union[Exit, AExit]] = []
-        self._async_exit: Optional[bool] = None
         self._async: Optional[bool] = None
+
+    def lock(self, dep: Dependency) -> Lock:
+        return self._lock[dep]
 
     @overload  # noqa: F811
     def bind(self, *, cached: bool) -> Callable[[Func], Func]:
@@ -38,56 +48,31 @@ class Injector(Dict['Dependency', Any], ContextManager['Injector'],
 
     def bind(self, func=None, *, cached=False):  # noqa: F811
         # noinspection PyShadowingNames
-        def wrapper(func: Func) -> Func:
-            from injector.bound import Bound
-            bound = Bound(func, self, cached)
+        def decorator(func: Func) -> Func:
+            assert not isinstance(func, type), \
+                "cannot bind class"
+            from injector.dependency import Dependency
+            bound = Dependency(func, cached=cached)
             if self._async is False and bound.is_async:
                 raise AsyncError(func, self)
-            return cast(Func, bound)
+
+            @wraps(func)
+            def wrapper(*args, **kwargs):
+                return bound.call(self, args, kwargs)
+
+            return cast(Func, wrapper)
 
         if func is None:
-            return wrapper
+            return decorator
         else:
-            return wrapper(func)
+            return decorator(func)
 
-    @overload  # noqa: F811
-    def cache(self, dep: Dependency, res: ContextManager[T]) -> T:
-        ...
+    def bind_dataclass(self, cls: Cls) -> Cls:
+        cls.__init__ = self.bind(cls.__init__)  # type: ignore
+        return cls
 
-    @overload  # noqa: F811
-    def cache(self, dep: Dependency, res: T) -> T:
-        ...
-
-    def cache(self, dep, res):  # noqa: F811
-        if isinstance(res, ContextManager):
-            self._async_exit = self._async_exit or False
-            self._exit.append(res.__exit__)
-            res = res.__enter__()
-        if dep.cached:
-            self[dep] = res
-        return res
-
-    @overload  # noqa: F811
-    async def acache(self, dep: Dependency, res: Awaitable[T]) -> T:
-        ...
-
-    @overload  # noqa: F811
-    async def acache(self, dep: Dependency, res: AsyncContextManager[T]
-                     ) -> T:
-        ...
-
-    async def acache(self, dep, res):  # noqa: F811
-        if isinstance(res, Awaitable):
-            res = await res
-        elif isinstance(res, AsyncContextManager):
-            self._async_exit = True
-            self._exit.append(res.__aexit__)
-            res = await res.__aenter__()
-        else:
-            raise NotImplementedError()
-        if dep.cached:
-            self[dep] = res
-        return res
+    def register_exit(self, exit_: Union[Exit, AExit]):
+        self._exit.append(exit_)
 
     def __enter__(self) -> Injector:
         self._async = False
@@ -99,9 +84,8 @@ class Injector(Dict['Dependency', Any], ContextManager['Injector'],
         while self._exit:
             ex = self._exit.pop()
             ret = ex(exc_type, exc_value, traceback)
-            if isinstance(ret, Awaitable):
-                raise NotImplementedError("Cannot exit async context manager"
-                                          "in sync exit")
+            assert not isinstance(ret, Awaitable), \
+                "Cannot exit async context manager in sync injector"
         self._async = None
 
     async def __aenter__(self) -> Injector:

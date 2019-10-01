@@ -4,7 +4,6 @@ from time import perf_counter
 from pytest import fixture, mark
 
 from injector import Injector, inject
-from injector.dependency import Dependency
 
 
 @fixture
@@ -13,7 +12,7 @@ def injector() -> Injector:
 
 
 @mark.asyncio
-async def test_sync_call(injector):
+async def test_call(injector):
     def dep() -> int:
         return 42
 
@@ -64,18 +63,16 @@ async def test_gathering_of_async_dependencies(injector):
 async def test_locking_of_async_dependencies(injector):
     var = 0
 
-    @Dependency
     async def dep1():
         nonlocal var
         var += 1
         await sleep(1)
 
-    @Dependency
-    async def dep2(_=dep1):
+    async def dep2(_=inject(dep1)):
         pass
 
     @injector.bind
-    async def func(_1=dep1, _2=dep2):
+    async def func(_1=inject(dep1), _2=inject(dep2)):
         pass
 
     await func()
