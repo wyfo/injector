@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from typing import Callable, TYPE_CHECKING
 
+from injector.exiter import Exiter
+
 if TYPE_CHECKING:
-    from injector.injector import Injector
+    pass
 
 
 class InjectionError(Exception):
@@ -15,7 +17,7 @@ class AsyncDependency(InjectionError):
     pass
 
 
-class DependencyWithFreeParameters(InjectionError):
+class Uncachable(InjectionError):
     pass
 
 
@@ -29,7 +31,7 @@ class InvalidType(InjectionError):
         self.error = error
 
 
-class AsyncError(InjectionError):
-    def __init__(self, func: Callable, injector: Injector):
+class ExitError(InjectionError):
+    def __init__(self, func: Callable, exiter: Exiter):
         super().__init__(func)
-        self.injector = injector
+        self.exiter = exiter

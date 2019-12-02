@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 from asyncio import gather
+from functools import wraps
 from inspect import Parameter, iscoroutinefunction, signature
 from typing import (Any, AsyncContextManager, Awaitable, Callable,
-                    ContextManager, Dict, Mapping, Optional, TYPE_CHECKING,
-                    Tuple, Type, TypeVar, overload)
+                    ContextManager, Dict, Mapping, Optional, Type, TypeVar,
+                    cast, overload)
 
-from injector.errors import (AsyncDependency, DependencyWithFreeParameters,
-                             EmptyDependency, InvalidType)
+from injector.cache import Cache
+from injector.errors import (AsyncDependency, EmptyDependency, InvalidType,
+                             Uncachable)
+from injector.exiter import Exiter, async_handle_result, sync_handle_result
+from injector.types import Kwargs
 from injector.utils import args_to_kwargs, is_async_ctx_mgr
 
 try:
@@ -15,11 +19,6 @@ try:
 except ImportError:
     def get_type_hints(*args, **kwargs):  # type: ignore
         raise NotImplementedError("get_type_hints cannot be imported")
-
-if TYPE_CHECKING:
-    from injector.injector import Injector
-
-Kwargs = Dict[str, Any]
 
 
 class Dependency:
@@ -47,7 +46,7 @@ class Dependency:
                     type_ = param.annotation
                 tmp[param.name] = Dependency(type_, cached=True)
             elif param.default is Parameter.empty and cached:
-                raise DependencyWithFreeParameters(func)
+                raise Uncachable(func)
         self.dependencies: Mapping[str, Dependency] = tmp
         async_dep = any(d.is_async for d in self.dependencies.values())
         if async_dep and not self.is_async:
@@ -64,28 +63,26 @@ class Dependency:
     def is_async(self) -> bool:
         return iscoroutinefunction(self.func) or is_async_ctx_mgr(self.func)
 
-    def _sync_call(self, inj: Injector, kwargs: Kwargs = None):
+    def _sync_call(self, cache: Cache, exiter: Exiter, kwargs: Kwargs = None):
         kwargs = kwargs or {}
         assert not self.is_async
-        if self in inj:
-            return inj[self]
+        if self in cache and self.cached:
+            return cache[self]
         for name, sub_dep in self.dependencies.items():
             if name in kwargs:
                 continue
-            kwargs[name] = sub_dep._sync_call(inj)
-        res = self.func(**kwargs)
-        if isinstance(res, ContextManager):
-            inj.register_exit(res.__exit__)
-            res = res.__enter__()
+            kwargs[name] = sub_dep._sync_call(cache, exiter)
+        res = sync_handle_result(self.func, kwargs, exiter)
         if self.cached:
-            inj[self] = res
+            cache[self] = res
         return res
 
-    async def _async_call(self, inj: Injector, kwargs: Kwargs = None):
+    async def _async_call(self, cache: Cache, exiter: Exiter,
+                          kwargs: Kwargs = None):
         kwargs = kwargs or {}
         assert self.is_async
-        if self in inj:
-            return inj[self]
+        if self in cache and self.cached:
+            return cache[self]
         gathered = []
         for name, sub_dep in self.dependencies.items():
             if name in kwargs:
@@ -93,34 +90,42 @@ class Dependency:
             elif sub_dep.is_async:
                 # noinspection PyShadowingNames
                 async def set_param(name: str, sub_dep: Dependency):
-                    async with inj.lock(sub_dep):
+                    async with cache.lock(sub_dep):
                         kwargs[name] = (  # type: ignore
-                            await sub_dep._async_call(inj))
+                            await sub_dep._async_call(cache, exiter))
 
                 gathered.append(set_param(name, sub_dep))
             else:
-                kwargs[name] = sub_dep._sync_call(inj)
+                kwargs[name] = sub_dep._sync_call(cache, exiter)
         if gathered:
             await gather(*gathered)
-        res = self.func(**kwargs)
-        if isinstance(res, Awaitable):
-            res = await res
-        elif isinstance(res, AsyncContextManager):
-            inj.register_exit(res.__aexit__)
-            res = await res.__aenter__()
-        else:
-            raise NotImplementedError()
+        res = await async_handle_result(self.func, kwargs, exiter)
         if self.cached:
-            inj[self] = res
+            cache[self] = res
         return res
 
-    def call(self, inj: Injector, args: Tuple = (), kwargs: Kwargs = None):
-        kwargs = kwargs or {}
-        kwargs.update(args_to_kwargs(self.parameters, *args))
-        if self.is_async:
-            return self._async_call(inj, kwargs)
-        else:
-            return self._sync_call(inj, kwargs)
+    def bind(self, cache: Cache, exiter: Exiter) -> Callable:
+        @wraps(self.func)
+        def wrapper(*args, **kwargs):
+            kwargs.update(args_to_kwargs(self.parameters, *args))
+            if self.is_async:
+                return self._async_call(cache, exiter, kwargs)
+            else:
+                return self._sync_call(cache, exiter, kwargs)
+
+        return wrapper
+
+
+Func = TypeVar("Func", bound=Callable)
+
+
+def bind(cache: Cache, exiter: Exiter = None, *, cached=False
+         ) -> Callable[[Func], Func]:
+    def wrapper(func: Func) -> Func:
+        dep = Dependency(func, cached=cached)
+        return cast(Func, dep.bind(cache, exiter))
+
+    return wrapper
 
 
 class TypeDependency:
@@ -158,5 +163,7 @@ def inject() -> Any:
 def inject(func: Callable = None):
     if func is None:
         return TypeDependency()
+    elif isinstance(func, Dependency):
+        return func
     else:
         return Dependency(func, cached=True)

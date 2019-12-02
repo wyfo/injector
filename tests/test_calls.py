@@ -4,11 +4,12 @@ from time import perf_counter
 from pytest import fixture, mark
 
 from injector import Injector, inject
+from injector.injector import ContextInjector
 
 
 @fixture
 def injector() -> Injector:
-    return Injector()
+    return ContextInjector()
 
 
 @mark.asyncio
@@ -31,11 +32,12 @@ async def test_call(injector):
     async def func3(i: int = inject(async_dep)) -> int:
         return i
 
-    for res in (
-            func(), func(42), func(i=42),
-            await func2(), await func2(42), await func2(i=42),
-            await func3(), await func3(42), await func3(i=42),
-    ):
+    results = (
+        func(), func(42), func(i=42),
+        await func2(), await func2(42), await func2(i=42),
+        await func3(), await func3(42), await func3(i=42),
+    )
+    for res in results:
         assert res == 42
 
 

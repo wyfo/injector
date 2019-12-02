@@ -1,20 +1,11 @@
 from __future__ import annotations
 
-import warnings
-from asyncio import Lock
-from collections import defaultdict
-from functools import wraps
-from typing import (Any, AsyncContextManager, Awaitable, Callable,
-                    ContextManager, Dict, List, Mapping, Optional,
-                    TYPE_CHECKING, Type, TypeVar, Union, cast, overload)
+from contextlib import AsyncExitStack, ExitStack
+from typing import Callable, TypeVar, overload
 
-from mypy.ipc import TracebackType
-
-from injector.errors import AsyncError
-from injector.utils import AExit, Exit
-
-if TYPE_CHECKING:
-    from injector.dependency import Dependency
+from injector.cache import Cache, ContextCache, DictCache
+from injector.dependency import bind
+from injector.exiter import Exiter
 
 try:
     from dataclasses import is_dataclass
@@ -22,21 +13,19 @@ except ImportError:
     def is_dataclass(obj):  # type: ignore
         return False
 
-T = TypeVar("T")
 Func = TypeVar("Func", bound=Callable)
 Cls = TypeVar("Cls", bound=type)
 
 
-class Injector(Dict['Dependency', Any], ContextManager['Injector'],
-               AsyncContextManager['Injector']):
-    def __init__(self):
+class Injector:
+    def __init__(self, cache: Cache, exiter: Exiter = None):
         super().__init__()
-        self._lock: Mapping[Dependency, Lock] = defaultdict(Lock)
-        self._exit: List[Union[Exit, AExit]] = []
-        self._async: Optional[bool] = None
+        self.cache = cache
+        self.exiter = exiter
 
-    def lock(self, dep: Dependency) -> Lock:
-        return self._lock[dep]
+    @overload  # noqa: F811
+    def bind(self, func: Func) -> Func:
+        ...
 
     @overload  # noqa: F811
     def bind(self, *, cached: bool) -> Callable[[Func], Func]:
@@ -47,62 +36,41 @@ class Injector(Dict['Dependency', Any], ContextManager['Injector'],
         ...
 
     def bind(self, func=None, *, cached=False):  # noqa: F811
-        # noinspection PyShadowingNames
-        def decorator(func: Func) -> Func:
-            assert not isinstance(func, type), \
-                "cannot bind class"
-            from injector.dependency import Dependency
-            bound = Dependency(func, cached=cached)
-            if self._async is False and bound.is_async:
-                raise AsyncError(func, self)
-
-            @wraps(func)
-            def wrapper(*args, **kwargs):
-                return bound.call(self, args, kwargs)
-
-            return cast(Func, wrapper)
-
+        decorator = bind(self.cache, self.exiter, cached=cached)
         if func is None:
             return decorator
         else:
             return decorator(func)
 
     def bind_dataclass(self, cls: Cls) -> Cls:
-        cls.__init__ = self.bind(cls.__init__)  # type: ignore
+        assert is_dataclass(cls)
+        cls.__init__ = self.bind(cls.__init__,  cached=False)  # type: ignore
         return cls
 
-    def register_exit(self, exit_: Union[Exit, AExit]):
-        self._exit.append(exit_)
-
     def __enter__(self) -> Injector:
-        self._async = False
+        assert self.exiter is None
+        self.exiter = ExitStack()
         return self
 
-    def __exit__(self, exc_type: Optional[Type[BaseException]],
-                 exc_value: Optional[BaseException],
-                 traceback: Optional[TracebackType]):
-        while self._exit:
-            ex = self._exit.pop()
-            ret = ex(exc_type, exc_value, traceback)
-            assert not isinstance(ret, Awaitable), \
-                "Cannot exit async context manager in sync injector"
-        self._async = None
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        assert isinstance(self.exiter, ExitStack)
+        self.exiter.__exit__(exc_type, exc_val, exc_tb)
 
-    async def __aenter__(self) -> Injector:
-        self._async = True
+    async def __aenter__(self):
+        assert self.exiter is None
+        self.exiter = AsyncExitStack()
         return self
 
-    async def __aexit__(self, exc_type: Optional[Type[BaseException]],
-                        exc_value: Optional[BaseException],
-                        traceback: Optional[TracebackType]):
-        while self._exit:
-            ex = self._exit.pop()
-            ret = ex(exc_type, exc_value, traceback)
-            if isinstance(ret, Awaitable):
-                await ret
-        self._async = None
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        assert isinstance(self.exiter, AsyncExitStack)
+        await self.exiter.__aexit__(exc_type, exc_val, exc_tb)
 
-    def __del__(self):
-        if self._exit:
-            warnings.warn("Injection context not exited",
-                          RuntimeWarning, source=self)
+
+class GlobalInjector(Injector):
+    def __init__(self):
+        super().__init__(DictCache())
+
+
+class ContextInjector(Injector):
+    def __init__(self):
+        super().__init__(ContextCache())

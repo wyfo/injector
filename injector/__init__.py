@@ -1,4 +1,6 @@
-__all__ = ["inject", "Injector"]
+__all__ = ["inject", "Injector", "GlobalInjector", "ContextInjector",
+           "DictCache", "ContextCache"]
 
 from injector.dependency import inject
-from injector.injector import Injector
+from injector.injector import Injector, ContextInjector, GlobalInjector
+from injector.cache import DictCache, ContextCache

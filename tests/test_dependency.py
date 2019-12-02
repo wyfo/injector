@@ -2,7 +2,7 @@ from pytest import raises
 
 from injector import inject
 from injector.dependency import Dependency
-from injector.errors import (AsyncDependency, DependencyWithFreeParameters,
+from injector.errors import (AsyncDependency, Uncachable,
                              EmptyDependency, InvalidType)
 
 
@@ -31,7 +31,7 @@ def test_dependency_with_free_parameters():
     def dep(_: int):
         pass
 
-    with raises(DependencyWithFreeParameters):
+    with raises(Uncachable):
         inject(dep)
 
     def dep_with_default(_: int = 0):

@@ -37,5 +37,7 @@ test3 = inject(afunc)
 test3 = 0
 test4 = inject(actx_mgr)
 test4 = 0
+test5: int = inject()
+test5 = 0
 # We can see that MyPy is able to infer type of injected func without
 # annotation, but Pycharm isn't

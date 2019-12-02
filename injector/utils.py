@@ -1,13 +1,6 @@
-from types import FunctionType, TracebackType
-from typing import (Any, AsyncContextManager, Awaitable, Callable,
-                    Mapping, Optional, Type, Union)
-
-Exit = Callable[[Optional[Type[BaseException]],
-                 Optional[BaseException],
-                 Optional[TracebackType]], Optional[bool]]
-AExit = Callable[[Optional[Type[BaseException]],
-                  Optional[BaseException],
-                  Optional[TracebackType]], Awaitable[Optional[bool]]]
+from types import FunctionType
+from typing import (Any, AsyncContextManager, Callable,
+                    Mapping, Type, Union)
 
 
 def is_async_ctx_mgr(func: Union[Callable, Type]):
